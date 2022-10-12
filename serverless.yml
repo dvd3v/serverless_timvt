@@ -1,0 +1,139 @@
+# Root properties
+service: vector-tiler
+frameworkVersion: '3'
+useDotenv: true
+
+# Parameters
+params:
+  prod:
+    stage-name: prod
+  dev:
+    stage-name: dev
+
+# Provider
+provider:
+  # General
+  name: aws
+  stage: ${self:custom.config.STAGE}
+  region: ${self:custom.config.REGION}
+  stackName: vector-tiler-stack-${self:custom.config.STAGE}
+
+  # Function settings
+  runtime: python3.8
+  logRetentionInDays: 14
+
+  # HTTP API settings
+  httpApi:
+    name: tiler-vector-${self:custom.config.STAGE}
+    metrics: true
+    cors: true
+
+  apiGateway:
+    binaryMediaTypes:
+      - '*/*'
+    minimumCompressionSize: 1
+
+
+  # IAM settings
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - 's3:ListBucket'
+          Resource:
+            Fn::Join:
+              - ''
+              - - 'arn:aws:s3:::'
+                - Ref: ServerlessDeploymentBucket
+
+resources:
+  Description: Vector tiler stack
+
+  Resources:
+    # Roles
+    VectorTilerRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: VectorTilerRole-${self:custom.config.STAGE}
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: cloudwatchPolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: 'Allow'
+                  Action:
+                    - 'logs:*'
+                  Resource:
+                    - 'arn:aws:logs:*:*:*'
+
+functions:
+  vectortiler:
+    module: app
+    handler: handler.handler
+    name: vector-tiler-${self:custom.config.STAGE}
+    memorySize: 2048
+    timeout: 25
+    role: VectorTilerRole
+    layers:
+      - arn:aws:lambda:eu-west-1:524387336408:layer:gdal32-python38-geo:2
+
+    environment:
+      CPL_TMPDIR: /tmp
+      GDAL_CACHEMAX: 25%
+      GDAL_DATA: /opt/share/gdal
+      GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
+      GDAL_HTTP_MERGE_CONSECUTIVE_RANGES: YES
+      GDAL_HTTP_MULTIPLEX: YES
+      GDAL_HTTP_VERSION: '2'
+      PROJ_LIB: /opt/share/proj
+      PYTHONWARNINGS: ignore
+      VSI_CACHE: TRUE
+      VSI_CACHE_SIZE: '536870912'
+      POSTGRES_HOST: ${self:custom.config.HOST}
+      POSTGRES_PORT: ${self:custom.config.PORT}
+      POSTGRES_DBNAME: ${self:custom.config.DB_NAME}
+      POSTGRES_USER: ${self:custom.config.USERNAME}
+      POSTGRES_PASS: ${self:custom.config.PASSWORD}
+
+    package:
+      patterns:
+        - app/**
+
+    vpc:
+      securityGroupIds:
+        - ${self:custom.config.SECURITY_GROUP_ID}
+      subnetIds:
+        - ${self:custom.config.SUBNET_1}
+        - ${self:custom.config.SUBNET_2}
+
+    events:
+      - httpApi:
+          path: /{proxy+}
+          method: '*'
+
+
+package:
+  individually: true
+  exclude:
+    - "*/**"
+    - "*"
+
+plugins:
+  - serverless-python-requirements
+
+custom:
+  config: ${file(opt:config_file)}
+
+  pythonRequirements:
+    dockerizePip: non-linux
+    slim: true
+    strip: false
